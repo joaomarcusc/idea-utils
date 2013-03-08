@@ -1,10 +1,5 @@
 #!/usr/bin/env python
-# This is a Python script you can use to execute the maven-war-plugin
-# web resources filtering manually. It requires two CLI arguments:
-#  * The path to the pom.xml file (not including the pom.xml file itself)
-#  * The profile id which contains the properties
-
-import os,fnmatch,sys
+import os,sys
 from lxml import etree
 import re
 
@@ -115,38 +110,77 @@ def eglob(pattern, directory='.'):
 
 class Global(object):
     src_to_target = {
-        "/src/": "/target/",
-        "main/webapp/": "WEB-INF/",
-        "main/resources/": "classes/"
+        "/src/": "/",
+        "main/resources/": "classes/",
+        "main/webapp/": ""
     }
 
-def execute_filtering(project_dir, resource_dirs, includes, excludes, map_replace):
+    src_to_target_props = {
+        "/src/": "/",
+        "main/resources/": "WEB-INF/classes/",
+        "main/webapp/": ""
+    }
+
+def filter_property_resources(project_dir, target_dir, map_replace):
+    files = []
+    for file in eglob("**/*.properties", project_dir):
+        target_file = file
+        target_file = target_file.replace(project_dir,target_dir)
+        if "/test/" in target_file:
+            continue
+        for key in Global.src_to_target_props:
+            target_file = target_file.replace(key, Global.src_to_target_props[key])
+        if not os.path.exists(target_file):
+            continue
+        print target_file
+        file_str = open(target_file).read()
+        for key in map_replace:
+            file_str = file_str.replace("${{{0}}}".format(key),map_replace[key])
+        f = open(target_file,"w+")
+        f.write(file_str)
+        f.close()
+
+def filter_web_resources(project_dir, target_dir, resource_dirs, includes, excludes, map_replace):
     files = []
     for resource_dir in resource_dirs:
         for include in includes:
             full_path = os.path.join(project_dir, resource_dir)
-            print full_path, include
             files += [x for x in eglob(include, full_path)]
     for resource_dir in resource_dirs:
         for exclude in excludes:
             full_path = os.path.join(project_dir, resource_dir)
-            print full_path, include
             files -= [x for x in eglob(include, full_path)]
     for file in files:
         target_file = file
+        target_file = target_file.replace(project_dir,target_dir)
         for key in Global.src_to_target:
             target_file = target_file.replace(key, Global.src_to_target[key])
-        file_str = open(file).read()
+        print target_file
+        file_str = open(target_file).read()
         for key in map_replace:
             file_str = file_str.replace("${{{0}}}".format(key),map_replace[key])
-        f = open(file,"w+")
+        f = open(target_file,"w+")
         f.write(file_str)
         f.close()
 
 def strip_ns(xml_string):
     return re.sub('xmlns="[^"]+"', '', xml_string)
 
-def web_resource_filter(project_dir, profile):
+
+def properties_resource_filter(project_dir, target_dir, profile):
+    doc = etree.fromstring(strip_ns(open(os.path.join(project_dir,"pom.xml")).read()))
+    profile_node = doc.xpath("profiles/profile[id/text()='{0}']".format(profile))
+    if not profile_node:
+        return
+    profile_node = profile_node[0]
+    properties_node = profile_node.find("properties")
+    prop_map = {}
+    for prop_node in properties_node:
+        prop_map[prop_node.tag] = prop_node.text
+
+    filter_property_resources(project_dir, target_dir, prop_map)
+
+def web_resource_filter(project_dir, target_dir, profile):
     doc = etree.fromstring(strip_ns(open(os.path.join(project_dir,"pom.xml")).read()))
     profile_node = doc.xpath("profiles/profile[id/text()='{0}']".format(profile))
     if not profile_node:
@@ -167,11 +201,10 @@ def web_resource_filter(project_dir, profile):
             if not resource_dir or (not includes and not excludes):
                 continue
             resource_dirs = resource_dir[0].split(",")
-            print resource_dirs, includes, excludes
 
             for resource_glob in resource_dirs:
-                execute_filtering(project_dir, resource_dirs, includes, excludes, prop_map)
+                filter_web_resources(project_dir, target_dir, resource_dirs, includes, excludes, prop_map)
 
 if __name__ == "__main__":
-    print sys.argv
-    web_resource_filter(sys.argv[1],sys.argv[2])
+    properties_resource_filter(sys.argv[1], sys.argv[2], sys.argv[3])
+    web_resource_filter(sys.argv[1],sys.argv[2],sys.argv[3])
